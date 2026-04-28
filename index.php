@@ -1,315 +1,349 @@
 <?php
 
-$db_host = "localhost";
-$db_user = "root";
-$db_pass = "";
-$db_name = "bollettino_biblioteca";
+$host = "localhost";
+$user = "root";
+$pass = "";
+$db   = "bollettino_biblioteca";
 
-$mysqli = new mysqli($db_host, $db_user, $db_pass, $db_name);
+$istanza = new mysqli($host, $user, $pass, $db);
 
-if ($mysqli->connect_error) {
-    die("Errore critico di connessione: " . $mysqli->connect_error);
+if ($istanza->connect_error) {
+    die("Database non raggiungibile.");
 }
 
-$feedback = ["msg" => "", "tipo" => ""];
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cmd'])) {
-    switch ($_POST['cmd']) {
-        case 'add_book':
-            $t = $mysqli->real_escape_string($_POST['t']);
-            $a = intval($_POST['a']);
-            $i = $mysqli->real_escape_string($_POST['i']);
-            $auth = intval($_POST['auth']);
-            $mysqli->query("INSERT INTO Libri (titolo, anno_pubblicazione, isbn, id_autore) VALUES ('$t', $a, '$i', $auth)");
-            $feedback = ["msg" => "Nuovo volume aggiunto all'archivio.", "tipo" => "success"];
-            break;
-
-        case 'add_loan':
-            $bk = intval($_POST['bk']);
-            $usr = intval($_POST['usr']);
-            $start = $_POST['s'];
-            $end = $_POST['e'];
-            $mysqli->query("INSERT INTO Prestiti (id_libro, id_utente, data_inizio, data_fine_prevista) VALUES ($bk, $usr, '$start', '$end')");
-            $feedback = ["msg" => "Procedura di prestito completata.", "tipo" => "success"];
-            break;
+$notifica = "";
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $task = $_POST['task'] ?? '';
+    
+    if ($task === 'new_book') {
+        $titolo = $istanza->real_escape_string($_POST['title']);
+        $anno = intval($_POST['year']);
+        $isbn = $istanza->real_escape_string($_POST['isbn']);
+        $aut = intval($_POST['author_id']);
+        $istanza->query("INSERT INTO Libri (titolo, anno_pubblicazione, isbn, id_autore) VALUES ('$titolo', $anno, '$isbn', $aut)");
+        $notifica = "Volume catalogato correttamente.";
+    } 
+    elseif ($task === 'new_loan') {
+        $lib = intval($_POST['book_id']);
+        $usr = intval($_POST['user_id']);
+        $d1 = $_POST['start_date'];
+        $d2 = $_POST['end_date'];
+        $istanza->query("INSERT INTO Prestiti (id_libro, id_utente, data_inizio, data_fine_prevista) VALUES ($lib, $usr, '$d1', '$d2')");
+        $notifica = "Transazione di prestito registrata.";
     }
 }
 
-if (isset($_GET['action']) && $_GET['action'] === 'return' && isset($_GET['pid'])) {
-    $pid = intval($_GET['pid']);
-    $mysqli->query("UPDATE Prestiti SET restituito = 1 WHERE id_prestito = $pid");
-    $feedback = ["msg" => "Il libro è rientrato in biblioteca.", "tipo" => "info"];
+if (isset($_GET['return_item'])) {
+    $item_id = intval($_GET['return_item']);
+    $istanza->query("UPDATE Prestiti SET restituito = 1 WHERE id_prestito = $item_id");
+    $notifica = "Libro rientrato in sede.";
 }
 
-$res_autori = $mysqli->query("SELECT id_autore, nome, cognome FROM Autori ORDER BY cognome ASC");
-$res_libri  = $mysqli->query("SELECT id_libro, titolo FROM Libri ORDER BY titolo ASC");
-$res_utenti = $mysqli->query("SELECT id_utente, nome, cognome FROM Utenti ORDER BY cognome ASC");
+$libri_full = $istanza->query("SELECT L.*, A.nome, A.cognome FROM Libri L JOIN Autori A ON L.id_autore = A.id_autore ORDER BY L.id_libro DESC");
+$prestiti_attivi = $istanza->query("SELECT P.*, L.titolo, U.nome, U.cognome FROM Prestiti P JOIN Libri L ON P.id_libro = L.id_libro JOIN Utenti U ON P.id_utente = U.id_utente ORDER BY P.restituito ASC, P.data_inizio DESC");
+
+$lista_autori = $istanza->query("SELECT * FROM Autori");
+$lista_libri = $istanza->query("SELECT * FROM Libri");
+$lista_utenti = $istanza->query("SELECT * FROM Utenti");
 ?>
 
 <!DOCTYPE html>
 <html lang="it">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard Biblioteca</title>
+    <title>Controllo Biblioteca v3</title>
     <style>
         :root {
-            --bg: #0f172a;
-            --card: #1e293b;
-            --accent: #8b5cf6;
-            --text: #f8fafc;
-            --border: #334155;
-        }
+    --main: #3b82f6;
+    --dark: #0b1220;
+    --light: #e0f2fe;
+    --gray: #cbd5e1;
+}
 
-        body {
-            background: var(--bg);
-            color: var(--text);
-            font-family: 'Inter', system-ui, sans-serif;
-            margin: 0;
-            padding: 40px 20px;
-        }
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background: #f0f6ff; 
+    color: var(--dark);
+    margin: 0;
+    padding: 0;
+}
 
-        .wrapper {
-            max-width: 1100px;
-            margin: 0 auto;
-        }
+.container {
+    max-width: 1200px;
+    margin: 30px auto;
+    padding: 0 20px;
+}
 
-        .dashboard {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 25px;
-        }
+.nav-bar {
+    background: var(--dark);
+    color: white;
+    padding: 1rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
 
-        .section {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 25px;
-            flex: 1 1 400px;
-        }
+.data-grid {
+    display: grid;
+    gap: 30px;
+    margin-bottom: 50px;
+}
 
-        .full-width {
-            flex: 1 1 100%;
-        }
+.table-box {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 6px 14px -4px rgba(59,130,246,0.2);
+    overflow: hidden;
+}
 
-        .hero {
-            margin-bottom: 40px;
-            border-left: 5px solid var(--accent);
-            padding-left: 20px;
-        }
+.table-header {
+    background: var(--main);
+    color: white;
+    padding: 15px 20px;
+    font-weight: bold;
+    font-size: 1.2rem;
+}
 
-        .input-group {
-            margin-bottom: 15px;
-        }
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
 
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-size: 0.9rem;
-            color: #94a3b8;
-        }
+th,
+td {
+    padding: 12px 20px;
+    text-align: left;
+    border-bottom: 1px solid var(--gray);
+}
 
-        input,
-        select {
-            width: 100%;
-            padding: 12px;
-            background: #0f172a;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: white;
-            box-sizing: border-box;
-        }
+th {
+    background: #eff6ff;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    color: #1e3a8a;
+}
 
-        .btn {
-            cursor: pointer;
-            padding: 12px 20px;
-            border: none;
-            border-radius: 6px;
-            font-weight: 600;
-            transition: 0.2s;
-            width: 100%;
-        }
+.badge {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
 
-        .btn-primary {
-            background: var(--accent);
-            color: white;
-        }
+.badge-on {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
 
-        .btn-primary:hover {
-            opacity: 0.9;
-            transform: translateY(-1px);
-        }
+.badge-off {
+    background: #bfdbfe;
+    color: #1e3a8a;
+}
 
-        .notification {
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 25px;
-            background: #1e293b;
-            border-right: 4px solid #10b981;
-        }
+.actions-area {
+    background: var(--dark);
+    color: white;
+    padding: 60px 0;
+    border-radius: 40px 40px 0 0;
+}
 
-        .loan-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px 0;
-            border-bottom: 1px solid var(--border);
-        }
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 40px;
+    margin-top: 30px;
+}
 
-        .badge {
-            font-size: 0.75rem;
-            padding: 4px 10px;
-            border-radius: 20px;
-            text-transform: uppercase;
-        }
+.form-card {
+    background: rgba(255,255,255,0.06);
+    padding: 25px;
+    border-radius: 15px;
+    border: 1px solid rgba(59,130,246,0.25);
+}
 
-        .badge-active {
-            background: #334155;
-            color: #fbbf24;
-        }
+input,
+select {
+    width: 100%;
+    padding: 10px;
+    margin-top: 8px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    border: none;
+}
 
-        .badge-done {
-            background: #064e3b;
-            color: #34d399;
-        }
+.btn-send {
+    background: var(--main);
+    color: white;
+    border: none;
+    padding: 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
+    font-weight: bold;
+    transition: 0.2s;
+}
 
-        .action-link {
-            color: #8b5cf6;
-            text-decoration: none;
-            font-size: 0.85rem;
-            border: 1px solid #8b5cf6;
-            padding: 3px 8px;
-            border-radius: 4px;
-        }
+.btn-send:hover {
+    background: #2563eb;
+}
+
+.alert {
+    background: #60a5fa;
+    color: white;
+    padding: 15px;
+    text-align: center;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.btn-ret {
+    color: var(--main);
+    text-decoration: none;
+    font-weight: bold;
+    font-size: 0.9rem;
+}
     </style>
 </head>
 <body>
 
-<div class="wrapper">
-    <header class="hero">
-        <h1 style="margin:0">Archivio Digitale</h1>
-        <p style="color: #64748b">Gestione flussi e catalogo bibliotecario</p>
-    </header>
+<div class="nav-bar">
+    <h2 style="margin:0">LibraryMonitor</h2>
+    <span>Sistema Integrato Gestione</span>
+</div>
 
-    <?php if($feedback['msg']): ?>
-        <div class="notification"><?= $feedback['msg'] ?></div>
+<div class="container">
+    <?php if($notifica): ?>
+        <div class="alert"><?= $notifica ?></div>
     <?php endif; ?>
 
-    <main class="dashboard">
+    <div class="data-grid">
         
-        <section class="section">
-            <h2 style="color:var(--accent)">+ Inventario Libri</h2>
-            <form method="POST">
-                <input type="hidden" name="cmd" value="add_book">
-                <div class="input-group">
-                    <label>Titolo Opera</label>
-                    <input type="text" name="t" required placeholder="Es. Il Nome della Rosa">
-                </div>
-                <div style="display:flex; gap:10px">
-                    <div class="input-group" style="flex:1">
-                        <label>Anno</label>
-                        <input type="number" name="a" required>
-                    </div>
-                    <div class="input-group" style="flex:2">
-                        <label>Codice ISBN</label>
-                        <input type="text" name="i" required>
-                    </div>
-                </div>
-                <div class="input-group">
+        <div class="table-box">
+            <div class="table-header">Registro Prestiti in Tempo Reale</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Libro</th>
+                        <th>Utente</th>
+                        <th>Inizio</th>
+                        <th>Stato</th>
+                        <th>Azione</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php while($p = $prestiti_attivi->fetch_assoc()): ?>
+                    <tr>
+                        <td><strong><?= $p['titolo'] ?></strong></td>
+                        <td><?= $p['nome'] . " " . $p['cognome'] ?></td>
+                        <td><?= $p['data_inizio'] ?></td>
+                        <td>
+                            <span class="badge <?= $p['restituito'] ? 'badge-off' : 'badge-on' ?>">
+                                <?= $p['restituito'] ? 'Restituito' : 'In Corso' ?>
+                            </span>
+                        </td>
+                        <td>
+                            <?php if(!$p['restituito']): ?>
+                                <a href="?return_item=<?= $p['id_prestito'] ?>" class="btn-ret">Chiudi ora</a>
+                            <?php else: ?>
+                                -
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-box">
+            <div class="table-header">Catalogo Libri</div>
+            <table style="font-size: 0.9rem;">
+                <thead>
+                    <tr><th>Titolo</th><th>Autore</th><th>Anno</th><th>ISBN</th></tr>
+                </thead>
+                <tbody>
+                    <?php while($l = $libri_full->fetch_assoc()): ?>
+                    <tr>
+                        <td><?= $l['titolo'] ?></td>
+                        <td><?= $l['cognome'] ?></td>
+                        <td><?= $l['anno_pubblicazione'] ?></td>
+                        <td style="font-family: monospace;"><?= $l['isbn'] ?></td>
+                    </tr>
+                    <?php endwhile; ?>
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+</div>
+
+<div class="actions-area">
+    <div class="container">
+        <h2 style="text-align: center; color: var(--main);">Pannello Operativo</h2>
+        <div class="form-grid">
+            
+            <div class="form-card">
+                <h3>+ Aggiungi Volume</h3>
+                <form method="POST">
+                    <input type="hidden" name="task" value="new_book">
+                    <label>Titolo</label><input type="text" name="title" required>
+                    <label>Anno</label><input type="number" name="year" required>
+                    <label>ISBN</label><input type="text" name="isbn" required>
                     <label>Autore</label>
-                    <select name="auth">
-                        <?php while($aut = $res_autori->fetch_assoc()): ?>
-                            <option value="<?= $aut['id_autore'] ?>"><?= $aut['cognome'] . " " . $aut['nome'] ?></option>
+                    <select name="author_id">
+                        <?php while($a = $lista_autori->fetch_assoc()): ?>
+                            <option value="<?= $a['id_autore'] ?>"><?= $a['nome'] ?> <?= $a['cognome'] ?></option>
                         <?php endwhile; ?>
                     </select>
-                </div>
-                <button type="submit" class="btn btn-primary">Registra nel sistema</button>
-            </form>
-        </section>
-
-        <section class="section">
-            <h2 style="color:#f59e0b">+ Nuovo Prestito</h2>
-            <form method="POST">
-                <input type="hidden" name="cmd" value="add_loan">
-                <div class="input-group">
-                    <label>Seleziona Volume</label>
-                    <select name="bk">
-                        <?php while($bk = $res_libri->fetch_assoc()): ?>
-                            <option value="<?= $bk['id_libro'] ?>"><?= $bk['titolo'] ?></option>
-                        <?php endwhile; ?>
-                    </select>
-                </div>
-                <div class="input-group">
-                    <label>Assegna a Utente</label>
-                    <select name="usr">
-                        <?php while($u = $res_utenti->fetch_assoc()): ?>
-                            <option value="<?= $u['id_utente'] ?>"><?= $u['cognome'] . " " . $u['nome'] ?></option>
-                        <?php endwhile; ?>
-                    </select>
-                </div>
-                <div style="display:flex; gap:10px">
-                    <div class="input-group" style="flex:1">
-                        <label>Data Ritiro</label>
-                        <input type="date" name="s" required>
-                    </div>
-                    <div class="input-group" style="flex:1">
-                        <label>Rientro Previsto</label>
-                        <input type="date" name="e" required>
-                    </div>
-                </div>
-                <button type="submit" class="btn" style="background:#f59e0b; color:white">Avvia Transazione</button>
-            </form>
-        </section>
-
-        <section class="section full-width">
-            <h2>Monitoraggio Utenti</h2>
-            <form method="GET" style="display: flex; gap: 15px; align-items: flex-end; margin-bottom: 30px;">
-                <div style="flex-grow: 1;">
-                    <label>Cerca Cronologia Utente:</label>
-                    <select name="id_utente">
-                        <option value="">-- Scegli un profilo --</option>
-                        <?php 
-                        $res_utenti->data_seek(0);
-                        while($u = $res_utenti->fetch_assoc()): 
-                            $sel = (isset($_GET['id_utente']) && $_GET['id_utente'] == $u['id_utente']) ? 'selected' : '';
-                        ?>
-                            <option value="<?= $u['id_utente'] ?>" <?= $sel ?>><?= $u['cognome'] . " " . $u['nome'] ?></option>
-                        <?php endwhile; ?>
-                    </select>
-                </div>
-                <button type="submit" class="btn btn-primary" style="width: auto;">Filtra Risultati</button>
-            </form>
-
-            <div class="results-list">
-                <?php
-                if(!empty($_GET['id_utente'])){
-                    $target = intval($_GET['id_utente']);
-                    $history = $mysqli->query("SELECT p.*, l.titolo FROM Prestiti p 
-                                             INNER JOIN Libri l ON p.id_libro = l.id_libro 
-                                             WHERE p.id_utente = $target ORDER BY p.data_inizio DESC");
-
-                    if($history->num_rows > 0){
-                        while($row = $history->fetch_assoc()){
-                            echo "<div class='loan-row'>";
-                            echo "<div><strong>{$row['titolo']}</strong><br><small style='color:#64748b'>Iniziato il: {$row['data_inizio']}</small></div>";
-                            
-                            if(!$row['restituito']){
-                                echo "<div><span class='badge badge-active'>In possesso</span> ";
-                                echo "<a href='?id_utente=$target&action=return&pid={$row['id_prestito']}' class='action-link'>Chiudi Prestito</a></div>";
-                            } else {
-                                echo "<div><span class='badge badge-done'>Archiviato</span></div>";
-                            }
-                            echo "</div>";
-                        }
-                    } else {
-                        echo "<p style='text-align:center; color:#64748b; padding: 20px;'>Nessuna attività registrata per questo profilo.</p>";
-                    }
-                }
-                ?>
+                    <button type="submit" class="btn-send">Cataloga</button>
+                </form>
             </div>
-        </section>
-    </main>
+
+            <div class="form-card">
+                <h3>+ Nuova Uscita</h3>
+                <form method="POST">
+                    <input type="hidden" name="task" value="new_loan">
+                    <label>Libro</label>
+                    <select name="book_id">
+                        <?php while($lb = $lista_libri->fetch_assoc()): ?>
+                            <option value="<?= $lb['id_libro'] ?>"><?= $lb['titolo'] ?></option>
+                        <?php endwhile; ?>
+                    </select>
+                    <label>Utente</label>
+                    <select name="user_id">
+                        <?php while($us = $lista_utenti->fetch_assoc()): ?>
+                            <option value="<?= $us['id_utente'] ?>"><?= $us['nome'] ?> <?= $us['cognome'] ?></option>
+                        <?php endwhile; ?>
+                    </select>
+                    <label>Data Inizio</label><input type="date" name="start_date" required>
+                    <label>Scadenza</label><input type="date" name="end_date" required>
+                    <button type="submit" class="btn-send" style="background: #f59e0b;">Registra Uscita</button>
+                </form>
+            </div>
+
+            <div class="form-card">
+                <h3>Filtro Utente</h3>
+                <form method="GET">
+                    <label>Seleziona Utente per vedere solo i suoi prestiti:</label>
+                    <select name="user_filter">
+                        <?php 
+                        $lista_utenti->data_seek(0);
+                        while($us = $lista_utenti->fetch_assoc()): ?>
+                            <option value="<?= $us['id_utente'] ?>"><?= $us['nome'] ?> <?= $us['cognome'] ?></option>
+                        <?php endwhile; ?>
+                    </select>
+                    <button type="submit" class="btn-send" style="background: #3b82f6;">Applica Filtro</button>
+                </form>
+                <p style="font-size: 0.8rem; color: #94a3b8; margin-top: 15px;">
+                    Nota: La tabella principale mostra tutti i movimenti. Usa questo campo per isolare un singolo iscritto.
+                </p>
+            </div>
+
+        </div>
+    </div>
 </div>
 
 </body>
-</html>
+</html> 
